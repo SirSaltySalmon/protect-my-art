@@ -24,6 +24,5 @@
   },
   "icons": {
     "128": "icon.png"
-  },
-  "host_permissions": []
+  }
 }
