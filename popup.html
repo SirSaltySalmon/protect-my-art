@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="popup.css">
+  <title>Protect My Art</title>
+</head>
+<body>
+  <div class="popup-container">
+    <header class="header">
+      <div class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM21 9V7L15 1H5C3.89 1 3 1.89 3 3V7H4V3H14V6H17V7H19V9H17V11H19V13H17V15H19V17H17V19H15V17H13V15H15V13H13V11H15V9H13V11H11V13H13V15H11V17H9V15H7V17H5V15H7V13H5V11H7V9H5V7H7V9H9V7H11V9H13V7H15V9H17V7H21V9Z"/>
+        </svg>
+        <h1>Protect My Art</h1>
+      </div>
+    </header>
+    
+    <main class="main-content">
+      <div class="status-section">
+        <div class="status-indicator" id="status-indicator">
+          <div class="status-icon" id="status-icon"></div>
+          <div class="status-text">
+            <h2 id="status-title">Checking...</h2>
+            <p id="status-subtitle">Scanning for AI protection tags</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="tags-section" id="tags-section">
+        <div class="tag-item" id="noai-status">
+          <div class="tag-icon"></div>
+          <div class="tag-info">
+            <span class="tag-name">noai</span>
+            <span class="tag-description">General AI training protection</span>
+          </div>
+          <div class="tag-status-indicator"></div>
+        </div>
+        
+        <div class="tag-item" id="noimageai-status">
+          <div class="tag-icon"></div>
+          <div class="tag-info">
+            <span class="tag-name">noimageai</span>
+            <span class="tag-description">Image AI training protection</span>
+          </div>
+          <div class="tag-status-indicator"></div>
+        </div>
+      </div>
+      
+      <div class="explanation-section" id="explanation-section">
+        <div class="explanation-content">
+          <p id="explanation-text">
+            These tags help protect artists' work by requesting that AI systems avoid using this content for training.
+          </p>
+        </div>
+      </div>
+      
+      <div class="loading-section" id="loading-section" style="display: none;">
+        <div class="spinner"></div>
+        <p>Analyzing page...</p>
+      </div>
+      
+      <div class="error-section" id="error-section" style="display: none;">
+        <div class="error-icon">⚠️</div>
+        <p>Unable to check this page. This may be a restricted or special page.</p>
+      </div>
+    </main>
+    
+    <footer class="footer">
+      <div class="footer-content">
+        <p>&copy; 2025 Protect My Art</p>
+        <div class="footer-links">
+          <a href="#" id="contact-link">Contact</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
