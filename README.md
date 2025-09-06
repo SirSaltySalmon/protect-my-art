@@ -5,7 +5,9 @@ A very basic extension that:
 * Checks robots meta tags of webpage for "noai" and "noimageai"
 * Visually indicate if the webpage withdraws consent for AI training
 This way, creators can check if the artwork they've uploaded has had their consent withdrawn. It is recommended for creators who wish to opt out of training to apply the following line of code to the HTML header of their eg. Portfolio, blogs, etc.:
+
 `<meta name="robots" content="noai, noimageai">`
+
 Or, if they are uploading to a platform that offers the option, to enable these tags on the webpages of their artworks.
 
 I made this extension with the aim of helping "noai" tags become the industry standard for withdrawing consent.
