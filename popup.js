@@ -29,7 +29,7 @@ const STATUS_MESSAGES = {
   error: {
     title: 'Unable to Check',
     subtitle: 'This page cannot be analyzed',
-    explanation: 'This page cannot be checked for AI protection tags. This may be a special browser page or restricted content.'
+    explanation: 'This page cannot be checked for AI protection tags. This may be a special browser page or restricted content. If you have only just installed the extension, refreshing might fix it.'
   }
 };
 
@@ -38,8 +38,8 @@ const TAG_EXPLANATIONS = {
   noimageai: 'Specifically requests that AI systems do not use images from this site for training'
 };
 
-// Initialize popup
-function initializePopup() {
+// Initialize popup with timeout and better error handling
+async function initializePopup() {
   // Get DOM elements
   elements = {
     statusIndicator: document.getElementById('status-indicator'),
@@ -61,8 +61,168 @@ function initializePopup() {
   // Set up event listeners
   setupEventListeners();
 
-  // Get current tab status
-  getCurrentTabStatus();
+  // Initial status fetch with timeout
+  showLoadingState();
+  console.log("Popup opened, checking active tab");
+  
+  try {
+    // Add timeout to prevent hanging
+    const tabQuery = new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(tabs);
+        }
+      });
+    });
+
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Tab query timeout')), 3000);
+    });
+
+    const tabs = await Promise.race([tabQuery, timeout]);
+    const tab = tabs[0];
+
+    if (!tab) {
+      console.log("No active tab found");
+      showErrorState();
+      return;
+    }
+
+    console.log("Found active tab:", tab.url, "Status:", tab.status);
+
+    // Check if tab is still loading
+    if (tab.status === 'loading') {
+      console.log("Tab is still loading, setting up tab update listener");
+      handleLoadingTab(tab);
+      return;
+    }
+
+    if (isRestrictedPage(tab.url)) {
+      console.log("Restricted page detected:", tab.url);
+      showRestrictedPageState();
+      return;
+    }
+
+    // Tab is complete, proceed normally
+    await checkContentScriptAndGetStatus(tab.id);
+
+  } catch (error) {
+    console.error("Error in initializePopup:", error);
+    showErrorState();
+  }
+}
+
+// Handle tabs that are still loading
+function handleLoadingTab(tab) {
+  console.log("Setting up listener for loading tab:", tab.id);
+
+  let timeoutId;
+
+  // Set up listener for tab updates
+  const tabUpdateListener = (updatedTabId, changeInfo) => {
+    if (updatedTabId === tab.id && changeInfo.status === 'complete') {
+      console.log("Tab finished loading:", tab.url);
+      chrome.tabs.onUpdated.removeListener(tabUpdateListener);
+
+      // Clear the timeout since we've handled the tab load
+      clearTimeout(timeoutId);
+
+      if (isRestrictedPage(tab.url)) {
+        console.log("Loaded tab is restricted:", tab.url);
+        showRestrictedPageState();
+        return;
+      }
+
+      checkContentScriptAndGetStatus(tab.id);
+    }
+  };
+
+  chrome.tabs.onUpdated.addListener(tabUpdateListener);
+
+  // Set up a fallback timeout in case the tab never finishes loading
+  timeoutId = setTimeout(() => {
+    chrome.tabs.onUpdated.removeListener(tabUpdateListener);
+    console.log("Timeout waiting for tab to load, attempting to get status anyway");
+    checkContentScriptAndGetStatus(tabId);
+  }, 10000); // 10 second timeout
+}
+
+// Check content script status and get tab status
+async function checkContentScriptAndGetStatus(tabId) {
+  try {
+    const isContentActive = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { type: 'IS_CONTENT_SCRIPT_ACTIVE' }, (response) => {
+        // If there's an error, assume content script is not active
+        if (chrome.runtime.lastError) {
+          console.log("Content script check error:", chrome.runtime.lastError.message);
+          resolve(false);
+        } else {
+          resolve(response);
+        }
+      });
+    });
+    
+    console.log("Content script active status:", isContentActive);
+
+    if (!isContentActive) {
+      console.log("Content script not active, setting up listener for activation");
+      
+      // Set up listener for content script activation
+      const messageListener = (message, sender, sendResponse) => {
+        if (message.type === 'INITIAL_SCAN_COMPLETE') {
+          console.log("Content script activated, getting status");
+          chrome.runtime.onMessage.removeListener(messageListener);
+          getCurrentTabStatus();
+          sendResponse({ received: true });
+        }
+      };
+      
+      chrome.runtime.onMessage.addListener(messageListener);
+      
+      // Set up a fallback timeout
+      setTimeout(() => {
+        chrome.runtime.onMessage.removeListener(messageListener);
+        console.log("Timeout waiting for content script, getting status anyway");
+        getCurrentTabStatus();
+      }, 5000); // 5 second timeout
+      
+    } else {
+      console.log("Content script ready, getting status immediately");
+      getCurrentTabStatus();
+    }
+  } catch (error) {
+    console.error("Error checking content script:", error);
+    getCurrentTabStatus(); // Try anyway
+  }
+}
+
+function getCurrentTabStatus(force_get_new_status = false) {
+  showLoadingState();
+  
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (!tabs || tabs.length === 0) {
+      console.error('No active tab found');
+      showErrorState();
+      return;
+    }
+    
+    const tabId = tabs[0].id;
+    chrome.runtime.sendMessage({ type: 'GET_TAB_STATUS', force_get_new_status, tabId }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error getting tab status:', chrome.runtime.lastError);
+        showErrorState();
+        return;
+      }
+      
+      if (response) {
+        updatePopupDisplay(response);
+      } else {
+        showErrorState();
+      }
+    });
+  });
 }
 
 // Set up event listeners
@@ -71,7 +231,6 @@ function setupEventListeners() {
   if (elements.contactLink) {
     elements.contactLink.addEventListener('click', (e) => {
       e.preventDefault();
-      // You can replace this with your actual contact page
       chrome.tabs.create({
         url: 'https://www.instagram.com/protect_my_art/'
       });
@@ -79,31 +238,14 @@ function setupEventListeners() {
   }
 }
 
-// Get current tab status from background script
-function getCurrentTabStatus() {
-  showLoadingState();
-  
-  chrome.runtime.sendMessage({ type: 'GET_TAB_STATUS' }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error('Error getting tab status:', chrome.runtime.lastError);
-      showErrorState();
-      return;
-    }
-    
-    if (response) {
-      updatePopupDisplay(response);
-    } else {
-      showErrorState();
-    }
-  });
-}
-
 // Update popup display based on tab status
 function updatePopupDisplay(status) {
   hideAllSections();
   
   if (status.error || status.noData) {
+    console.log("Status indicates error or no data:", status);
     if (isRestrictedPage(status.url)) {
+      console.log("Restricted page detected:", status.url);
       showRestrictedPageState();
     } else {
       showLoadingState();
@@ -138,9 +280,6 @@ function updatePopupDisplay(status) {
   
   // Update explanation text
   updateExplanationText(statusKey, status);
-  
-  // Update additional information
-  updateAdditionalInfo(status);
 }
 
 // Update status indicator
@@ -189,23 +328,6 @@ function updateExplanationText(statusKey, status) {
   elements.explanationText.textContent = statusInfo.explanation;
 }
 
-// Update additional information
-function updateAdditionalInfo(status) {
-  let infoText = '';
-  
-  if (status.hasNoAI && status.hasNoImageAI) {
-    infoText = 'This website has requested protection for both general AI training and image-specific AI training. This is the most comprehensive protection available.';
-  } else if (status.hasNoAI) {
-    infoText = 'This website has requested general AI training protection, but does not specifically protect images. Image AI systems may still use content from this site.';
-  } else if (status.hasNoImageAI) {
-    infoText = 'This website specifically protects images from AI training, but does not request general AI training protection for other content.';
-  } else {
-    infoText = 'This website has not implemented AI protection tags. Media uploaded here will not be able to withdraw consent from crawlers.';
-  }
-  
-  elements.additionalText.textContent = infoText;
-}
-
 // Show loading state
 function showLoadingState() {
   hideAllSections();
@@ -243,7 +365,7 @@ function showRestrictedPageState() {
   
   if (errorIcon) errorIcon.textContent = '🔒';
   if (errorText) {
-    errorText.textContent = 'This extension cannot analyze special browser pages like settings, new tab, or other extensions for security reasons.';
+    errorText.textContent = 'This extension cannot analyze special browser pages like settings, new tab, or other extensions for security reasons. If you have only just installed the extension, refreshing the webpage might fix it. Or, if timeout (10s) have occured, try the refresh icon on this popup.';
   }
   
   // Update status indicator
@@ -264,8 +386,9 @@ function hideAllSections() {
 
 // Check if URL is a restricted page
 function isRestrictedPage(url) {
-  if (!url) return true;
-  
+  if (!url) {
+    return true;
+  }
   const restrictedPrefixes = [
     'chrome://',
     'chrome-extension://',
@@ -273,7 +396,9 @@ function isRestrictedPage(url) {
     'edge://',
     'about:',
     'file://',
-    ''
+    'view-source:',
+    'opera://',
+    'vivaldi://'
   ];
   
   return restrictedPrefixes.some(prefix => url.startsWith(prefix));
@@ -287,11 +412,6 @@ function formatUrl(url) {
   } catch {
     return url || 'Unknown';
   }
-}
-
-// Refresh button handler
-function handleRefresh() {
-  getCurrentTabStatus();
 }
 
 // Add refresh capability
@@ -311,51 +431,10 @@ function addRefreshButton() {
       border-radius: 4px;
       margin-left: auto;
     `;
-    refreshButton.addEventListener('click', handleRefresh);
+    refreshButton.addEventListener('click', () => getCurrentTabStatus(true));
     header.appendChild(refreshButton);
   }
 }
-
-// Handle popup visibility changes
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    // Popup became visible, refresh status
-    getCurrentTabStatus();
-  }
-});
-
-// Auto-refresh every 30 seconds while popup is open
-let autoRefreshInterval;
-function startAutoRefresh() {
-  autoRefreshInterval = setInterval(() => {
-    if (!document.hidden) {
-      getCurrentTabStatus();
-    }
-  }, 30000);
-}
-
-function stopAutoRefresh() {
-  if (autoRefreshInterval) {
-    clearInterval(autoRefreshInterval);
-    autoRefreshInterval = null;
-  }
-}
-
-// Start auto-refresh when popup opens
-startAutoRefresh();
-
-// Clean up when popup closes
-window.addEventListener('beforeunload', () => {
-  stopAutoRefresh();
-});
-
-// Handle keyboard shortcuts
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'r' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    handleRefresh();
-  }
-});
 
 // Initialize when DOM is loaded
 if (document.readyState === 'loading') {

@@ -1,4 +1,8 @@
 // Content script to check for AI protection meta tags
+
+// Flag to indicate if content script is active, is not active until initial scan completes
+var isActive = false;
+
 (function() {
   'use strict';
 
@@ -40,16 +44,21 @@
   }
 
   // Send results to background script
-  function sendResultsToBackground(results) {
+  function sendResultsToBackground(results, isInitial = false) {
+    console.log("PMA: Trying to send results", results);
     try {
       chrome.runtime.sendMessage({
         type: 'AI_PROTECTION_STATUS',
-        data: results
+        data: results,
+        isInitial: isInitial
       }).catch(error => {
         console.debug('Protect My Art: Error sending message to background script:', error);
       });
     } catch (error) {
       console.debug('Protect My Art: Runtime not available:', error);
+    }
+    if (isInitial) {
+      isActive = true; // Mark as active after initial scan
     }
   }
 
@@ -58,13 +67,14 @@
     // Wait a bit for dynamic content to load
     setTimeout(() => {
       const results = checkMetaRobotsTags();
-      sendResultsToBackground(results);
+      sendResultsToBackground(results, true);
     }, 100);
   }
 
   // Debounced function to avoid excessive checking
   let checkTimeout;
   function debouncedCheck() {
+    console.log("PMA: Debounced check triggered");
     clearTimeout(checkTimeout);
     checkTimeout = setTimeout(() => {
       const results = checkMetaRobotsTags();
@@ -72,31 +82,53 @@
     }, 500);
   }
 
+  function checkIfMutationRelevant(mutations) {
+    let shouldCheck = false;
+    mutations.forEach((mutation) => {
+      if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach((node) => {
+          if (
+            node.nodeType === Node.ELEMENT_NODE &&
+            node.tagName === 'META' &&
+            node.getAttribute('name') &&
+            node.getAttribute('name').toLowerCase() === 'robots'
+          ) {
+            shouldCheck = true;
+          }
+        });
+        mutation.removedNodes.forEach((node) => {
+          if (
+            node.nodeType === Node.ELEMENT_NODE &&
+            node.tagName === 'META' &&
+            node.getAttribute('name') &&
+            node.getAttribute('name').toLowerCase() === 'robots'
+          ) {
+            shouldCheck = true;
+          }
+        });
+      }
+      if (
+        mutation.type === 'attributes' &&
+        mutation.target.tagName === 'META' &&
+        mutation.target.getAttribute('name') &&
+        mutation.target.getAttribute('name').toLowerCase() === 'robots' &&
+        mutation.attributeName === 'content'
+      ) {
+        shouldCheck = true;
+      }
+  });
+  return shouldCheck;
+  }
+
   // Monitor for dynamic changes to meta tags
   function setupDynamicMonitoring() {
     const observer = new MutationObserver((mutations) => {
       let shouldCheck = false;
 
-      mutations.forEach((mutation) => {
-        if (mutation.type === 'childList') {
-          // Check if any added nodes are meta tags or contain meta tags
-          mutation.addedNodes.forEach((node) => {
-            if (node.nodeType === Node.ELEMENT_NODE) {
-              if (node.tagName === 'META' || node.querySelector('meta')) {
-                shouldCheck = true;
-              }
-            }
-          });
-        }
-        
-        if (mutation.type === 'attributes' && 
-            mutation.target.tagName === 'META' && 
-            (mutation.attributeName === 'name' || mutation.attributeName === 'content')) {
-          shouldCheck = true;
-        }
-      });
+      shouldCheck = checkIfMutationRelevant(mutations);
 
       if (shouldCheck) {
+        console.log("PMA: Detected relevant DOM mutation, rechecking meta tags");
         debouncedCheck();
       }
     });
@@ -136,14 +168,17 @@
     }
   });
 
-  // Handle visibility changes (tab switching)
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      // Tab became visible, do a quick check
-      setTimeout(() => {
-        const results = checkMetaRobotsTags();
-        sendResultsToBackground(results);
-      }, 100);
+  // Listen for scan request from popup/background
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'REQUEST_TAB_SCAN') {
+      const results = checkMetaRobotsTags();
+      sendResultsToBackground(results); // still updates
+      console.log("PMA: Sent scan results to background:", results);
+      sendResponse(results); // <-- Send actual scan results as response
+      return true; // <-- Keep channel open for async response
+    }
+    if (message.type === 'IS_CONTENT_SCRIPT_ACTIVE') {
+      return sendResponse({ active: isActive });
     }
   });
 

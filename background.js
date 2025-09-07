@@ -31,10 +31,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'AI_PROTECTION_STATUS' && sender.tab) {
     const tabId = sender.tab.id;
     const { hasNoAI, hasNoImageAI, url, timestamp } = message.data;
-    
+
     // Determine if site has any protection
     const hasProtection = hasNoAI || hasNoImageAI;
-    
+
+    console.log("Received tab status, ", message.data, "for tab:", tabId);
     // Store status for this tab
     tabStatuses.set(tabId, {
       hasNoAI,
@@ -47,33 +48,75 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // Update icon
     updateIcon(tabId, hasProtection);
-    
+
     // Send acknowledgment
     sendResponse({ success: true });
+
+    if (message.isInitial) {
+      chrome.runtime.sendMessage({
+        type: 'INITIAL_SCAN_COMPLETE',
+      });
+    }
+    return;
   }
-  
-  return true; // Keep message channel open for async response
+
+  if (message.type === 'GET_TAB_STATUS') {
+    handleGetTabStatus(message, sender, sendResponse);
+    return true; // Indicate async response
+  }
 });
+
+async function handleGetTabStatus(message, sender, sendResponse) {
+  const tabId = message.tabId;
+  var status = tabStatuses.get(tabId);
+  if (status) {
+    if (!message.force_get_new_status && !status.noData && !status.error) {
+      console.log("Sending existing tab status to popup:", status);
+      sendResponse(status);
+      return;
+    }
+  }
+
+  console.log("Had to request new scan from content script for tab:", tabId);
+  console.log("Existing status:", status, "force_get_new_status:", message.force_get_new_status);
+
+  // Request content script to scan and wait for results
+  const results = await new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { type: 'REQUEST_TAB_SCAN' }, (response) => {
+      resolve(response);
+    });
+  });
+
+  // Defensive fallback if results is undefined
+  const safeResults = results || {
+    hasNoAI: false,
+    hasNoImageAI: false,
+    url: null,
+    timestamp: Date.now(),
+    tabId: tabId,
+    noData: true
+  };
+
+  // Update tabStatuses immediately
+  tabStatuses.set(tabId, {
+    ...safeResults,
+    hasProtection: safeResults.hasNoAI || safeResults.hasNoImageAI,
+    tabId: tabId
+  });
+
+  status = tabStatuses.get(tabId);
+
+  console.log("Got tab status, sending to popup:", status);
+  sendResponse(status);
+
+  return true; // Keep message channel open for async response
+}
 
 // Handle tab updates (navigation, refresh, etc.)
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'loading' || changeInfo.url) {
-    // Reset to negative icon while page loads
+  if (changeInfo.status === 'loading') {
     updateIcon(tabId, false);
-    
-    // Clear old status
-    tabStatuses.delete(tabId);
-    
-    // Set temporary status
-    tabStatuses.set(tabId, {
-      hasNoAI: false,
-      hasNoImageAI: false,
-      hasProtection: false,
-      url: tab.url,
-      timestamp: Date.now(),
-      tabId,
-      loading: true
-    });
+    // Rescanning is already handled by content script on page load
   }
 });
 
@@ -90,51 +133,6 @@ chrome.runtime.onStartup.addListener(() => {
 // Handle extension installation/enable
 chrome.runtime.onInstalled.addListener(() => {
   tabStatuses.clear();
-});
-
-// Provide status to popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'GET_TAB_STATUS') {
-    chrome.tabs.query({ active: true, currentWindow: true })
-      .then(tabs => {
-        if (tabs[0]) {
-          const status = tabStatuses.get(tabs[0].id) || {
-            hasNoAI: false,
-            hasNoImageAI: false,
-            hasProtection: false,
-            url: tabs[0].url,
-            timestamp: Date.now(),
-            tabId: tabs[0].id,
-            noData: true
-          };
-          sendResponse(status);
-        } else {
-          sendResponse({
-            hasNoAI: false,
-            hasNoImageAI: false,
-            hasProtection: false,
-            url: '',
-            timestamp: Date.now(),
-            tabId: null,
-            error: true
-          });
-        }
-      })
-      .catch(error => {
-        console.error('Error getting tab status:', error);
-        sendResponse({
-          hasNoAI: false,
-          hasNoImageAI: false,
-          hasProtection: false,
-          url: '',
-          timestamp: Date.now(),
-          tabId: null,
-          error: true
-        });
-      });
-    
-    return true; // Keep message channel open for async response
-  }
 });
 
 // Handle tab activation (switching between tabs)
