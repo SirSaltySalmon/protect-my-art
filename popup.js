@@ -38,6 +38,9 @@ const TAG_EXPLANATIONS = {
   noimageai: 'Specifically requests that AI systems do not use images from this site for training'
 };
 
+// Transient context for the next status request
+let nextRequest = { force: false };
+
 // Initialize popup with timeout and better error handling
 async function initializePopup() {
   // Get DOM elements
@@ -63,55 +66,8 @@ async function initializePopup() {
 
   // Initial status fetch with timeout
   showLoadingState();
-  console.log("Popup opened, checking active tab");
   
-  try {
-    // Add timeout to prevent hanging
-    const tabQuery = new Promise((resolve, reject) => {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(tabs);
-        }
-      });
-    });
-
-    const timeout = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Tab query timeout')), 3000);
-    });
-
-    const tabs = await Promise.race([tabQuery, timeout]);
-    const tab = tabs[0];
-
-    if (!tab) {
-      console.log("No active tab found");
-      showErrorState();
-      return;
-    }
-
-    console.log("Found active tab:", tab.url, "Status:", tab.status);
-
-    // Check if tab is still loading
-    if (tab.status === 'loading') {
-      console.log("Tab is still loading, setting up tab update listener");
-      handleLoadingTab(tab);
-      return;
-    }
-
-    if (isRestrictedPage(tab.url)) {
-      console.log("Restricted page detected:", tab.url);
-      showRestrictedPageState();
-      return;
-    }
-
-    // Tab is complete, proceed normally
-    await checkContentScriptAndGetStatus(tab.id);
-
-  } catch (error) {
-    console.error("Error in initializePopup:", error);
-    showErrorState();
-  }
+  await refreshActiveTabStatus(false);
 }
 
 // Handle tabs that are still loading
@@ -145,7 +101,7 @@ function handleLoadingTab(tab) {
   timeoutId = setTimeout(() => {
     chrome.tabs.onUpdated.removeListener(tabUpdateListener);
     console.log("Timeout waiting for tab to load, attempting to get status anyway");
-    checkContentScriptAndGetStatus(tabId);
+    checkContentScriptAndGetStatus(tab.id);
   }, 10000); // 10 second timeout
 }
 
@@ -198,7 +154,61 @@ async function checkContentScriptAndGetStatus(tabId) {
   }
 }
 
-function getCurrentTabStatus(force_get_new_status = false) {
+// Extracted active tab refresh flow so it can be reused (e.g., refresh button)
+async function refreshActiveTabStatus(force_get_new_status = false) {
+  try {
+    // Set context for the upcoming status request
+    nextRequest.force = !!force_get_new_status;
+
+    // Add timeout to prevent hanging
+    const tabQuery = new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(tabs);
+        }
+      });
+    });
+
+    const timeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Tab query timeout')), 3000);
+    });
+
+    const tabs = await Promise.race([tabQuery, timeout]);
+    const tab = tabs[0];
+
+    if (!tab) {
+      console.log("No active tab found");
+      showErrorState();
+      return;
+    }
+
+    console.log("Found active tab:", tab.url, "Status:", tab.status);
+
+    // Check if tab is still loading
+    if (tab.status === 'loading') {
+      console.log("Tab is still loading, setting up tab update listener");
+      handleLoadingTab(tab);
+      return;
+    }
+
+    if (isRestrictedPage(tab.url)) {
+      console.log("Restricted page detected:", tab.url);
+      showRestrictedPageState();
+      return;
+    }
+
+    // Tab is complete, proceed normally
+    await checkContentScriptAndGetStatus(tab.id);
+
+  } catch (error) {
+    console.error("Error in refreshActiveTabStatus:", error);
+    showErrorState();
+  }
+}
+
+function getCurrentTabStatus() {
   showLoadingState();
   
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -209,6 +219,8 @@ function getCurrentTabStatus(force_get_new_status = false) {
     }
     
     const tabId = tabs[0].id;
+    const force_get_new_status = nextRequest.force === true;
+    nextRequest.force = false; // consume once
     chrome.runtime.sendMessage({ type: 'GET_TAB_STATUS', force_get_new_status, tabId }, (response) => {
       if (chrome.runtime.lastError) {
         console.error('Error getting tab status:', chrome.runtime.lastError);
@@ -431,7 +443,7 @@ function addRefreshButton() {
       border-radius: 4px;
       margin-left: auto;
     `;
-    refreshButton.addEventListener('click', () => getCurrentTabStatus(true));
+    refreshButton.addEventListener('click', () => refreshActiveTabStatus(true));
     header.appendChild(refreshButton);
   }
 }
