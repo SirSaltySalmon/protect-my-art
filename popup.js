@@ -100,21 +100,27 @@ function handleLoadingTab(tab) {
   // Set up a fallback timeout in case the tab never finishes loading
   timeoutId = setTimeout(() => {
     chrome.tabs.onUpdated.removeListener(tabUpdateListener);
-    console.log("Timeout waiting for tab to load, attempting to get status anyway");
-    checkContentScriptAndGetStatus(tab.id);
+    console.log("Timeout waiting for tab to load. Attempting to get status anyway. If this occur, refreshing after page loads might still give result");
+    checkContentScriptAndGetStatus(tab.id, true);
   }, 10000); // 10 second timeout
 }
 
 // Check content script status and get tab status
 async function checkContentScriptAndGetStatus(tabId) {
+  let giveUpConnecting = false;
+
   try {
     const isContentActive = await new Promise((resolve) => {
       chrome.tabs.sendMessage(tabId, { type: 'IS_CONTENT_SCRIPT_ACTIVE' }, (response) => {
         // If there's an error, assume content script is not active
         if (chrome.runtime.lastError) {
           console.log("Content script check error:", chrome.runtime.lastError.message);
+          if (chrome.runtime.lastError.message.includes("Receiving end does not exist")) {
+            giveUpConnecting = true;
+          }
           resolve(false);
         } else {
+          // If the script has loaded but initial scan hasn't completed, will return false.
           resolve(response);
         }
       });
@@ -123,6 +129,14 @@ async function checkContentScriptAndGetStatus(tabId) {
     console.log("Content script active status:", isContentActive);
 
     if (!isContentActive) {
+      // If the below condition is true then
+      // Content script is just non existent, probably because of restriction.
+      if (giveUpConnecting) {
+        console.log("Giving up connecting to content script, probably restricted page, getting status anyway");
+        getCurrentTabStatus();
+        return;
+      }
+
       console.log("Content script not active, setting up listener for activation");
       
       // Set up listener for content script activation
@@ -136,13 +150,6 @@ async function checkContentScriptAndGetStatus(tabId) {
       };
       
       chrome.runtime.onMessage.addListener(messageListener);
-      
-      // Set up a fallback timeout
-      setTimeout(() => {
-        chrome.runtime.onMessage.removeListener(messageListener);
-        console.log("Timeout waiting for content script, getting status anyway");
-        getCurrentTabStatus();
-      }, 5000); // 5 second timeout
       
     } else {
       console.log("Content script ready, getting status immediately");
@@ -255,17 +262,8 @@ function updatePopupDisplay(status) {
   hideAllSections();
   
   if (status.error || status.noData) {
-    console.log("Status indicates error or no data:", status);
-    if (isRestrictedPage(status.url)) {
-      console.log("Restricted page detected:", status.url);
-      showRestrictedPageState();
-    } else {
-      showLoadingState();
-      // Retry after a short delay
-      setTimeout(() => {
-        getCurrentTabStatus();
-      }, 1000);
-    }
+    console.log("Status indicates error or no data:", status, "Restricted page detected:", status.url);
+    showRestrictedPageState();
     return;
   }
   
@@ -401,19 +399,25 @@ function isRestrictedPage(url) {
   if (!url) {
     return true;
   }
-  const restrictedPrefixes = [
-    'chrome://',
-    'chrome-extension://',
-    'moz-extension://',
-    'edge://',
-    'about:',
-    'file://',
-    'view-source:',
-    'opera://',
-    'vivaldi://'
-  ];
+  return false;
+  // The code below would work, but they make the extension require host permissions
+  // This would make Google review it for longer before I could publish it
+  // I instead just allowed it to detect if the content script is injected.
+  // Not injected = No receiving end error = Restricted page
+  // This means unnecessary checks are made, but it shouldn't really affect performance.
+  //const restrictedPrefixes = [
+  //  'chrome://',
+  //  'chrome-extension://',
+  //  'moz-extension://',
+  //  'edge://',
+  //  'about:',
+  //  'file://',
+  //  'view-source:',
+  //  'opera://',
+  //  'vivaldi://'
+  //];
   
-  return restrictedPrefixes.some(prefix => url.startsWith(prefix));
+  //return restrictedPrefixes.some(prefix => url.startsWith(prefix));
 }
 
 // Format URL for display
