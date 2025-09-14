@@ -100,8 +100,8 @@ function handleLoadingTab(tab) {
   // Set up a fallback timeout in case the tab never finishes loading
   timeoutId = setTimeout(() => {
     chrome.tabs.onUpdated.removeListener(tabUpdateListener);
-    console.log("Timeout waiting for tab to load. Attempting to get status anyway. If this occur, refreshing after page loads might still give result");
-    checkContentScriptAndGetStatus(tab.id, true);
+    console.log("Timeout waiting for tab to load. Attempting to get status anyway. Should still connect listener and await content script to finish its scan.");
+    checkContentScriptAndGetStatus(tab.id);
   }, 10000); // 10 second timeout
 }
 
@@ -375,7 +375,7 @@ function showRestrictedPageState() {
   
   if (errorIcon) errorIcon.textContent = '🔒';
   if (errorText) {
-    errorText.textContent = 'This extension cannot analyze special browser pages like settings, new tab, or other extensions for security reasons. If you have only just installed the extension, refreshing the webpage might fix it. Or, if timeout (10s) have occured, try the refresh icon on this popup.';
+    errorText.textContent = 'This extension cannot analyze special browser pages like settings, new tab, or other extensions for security reasons. If you have only just installed the extension, refreshing the webpage might fix it.';
   }
   
   // Update status indicator
@@ -399,25 +399,22 @@ function isRestrictedPage(url) {
   if (!url) {
     return true;
   }
-  return false;
-  // The code below would work, but they make the extension require host permissions
-  // This would make Google review it for longer before I could publish it
-  // I instead just allowed it to detect if the content script is injected.
-  // Not injected = No receiving end error = Restricted page
-  // This means unnecessary checks are made, but it shouldn't really affect performance.
-  //const restrictedPrefixes = [
-  //  'chrome://',
-  //  'chrome-extension://',
-  //  'moz-extension://',
-  //  'edge://',
-  //  'about:',
-  //  'file://',
-  //  'view-source:',
-  //  'opera://',
-  //  'vivaldi://'
-  //];
+  // if doesn't fall into the restricted prefixes,
+  // The following logic is already implemented in checkContentScriptAndGetStatus()
+  // Content script not injected = No receiving end error = Restricted page
+  // So can still identify the restricted page
+  const restrictedPrefixes = [
+    'chrome://',
+    'chrome-extension://',
+    'moz-extension://',
+    'opera://',
+    'edge://',
+    'about:',
+    'file://',
+    'view-source:',
+  ];
   
-  //return restrictedPrefixes.some(prefix => url.startsWith(prefix));
+  return restrictedPrefixes.some(prefix => url.startsWith(prefix));
 }
 
 // Format URL for display
